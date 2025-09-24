@@ -57,6 +57,24 @@ class RTGSDatabase:
             )
         """)
         
+        # Remitter table for bank details
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS remitters (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                account_number TEXT NOT NULL,
+                account_name TEXT NOT NULL,
+                bank_name TEXT NOT NULL,
+                branch_name TEXT,
+                ifsc_code TEXT NOT NULL,
+                swift_code TEXT,
+                pan_number TEXT,
+                mobile TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users (id)
+            )
+        """)
+        
         conn.commit()
         conn.close()
     
@@ -146,6 +164,151 @@ class RTGSDatabase:
         
         conn.close()
         return beneficiaries
+    
+    def create_transaction(self, user_id, beneficiary_id, amount, purpose=""):
+        """Create a new transaction"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            INSERT INTO transactions (user_id, beneficiary_id, amount, purpose)
+            VALUES (?, ?, ?, ?)
+        """, (user_id, beneficiary_id, amount, purpose))
+        
+        conn.commit()
+        transaction_id = cursor.lastrowid
+        conn.close()
+        
+        return {"success": True, "transaction_id": transaction_id}
+    
+    def get_transactions(self, user_id):
+        """Get all transactions for a user"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT t.id, t.amount, t.purpose, t.status, t.created_at,
+                   b.name as beneficiary_name, b.account_number
+            FROM transactions t
+            JOIN beneficiaries b ON t.beneficiary_id = b.id
+            WHERE t.user_id = ?
+            ORDER BY t.created_at DESC
+        """, (user_id,))
+        
+        transactions = []
+        for row in cursor.fetchall():
+            transactions.append({
+                "id": row[0],
+                "amount": row[1],
+                "purpose": row[2],
+                "status": row[3],
+                "created_at": row[4],
+                "beneficiary_name": row[5],
+                "beneficiary_account": row[6]
+            })
+        
+        conn.close()
+        return transactions
+    
+    def get_dashboard_stats(self, user_id):
+        """Get dashboard statistics"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        # Total transactions
+        cursor.execute("SELECT COUNT(*) FROM transactions WHERE user_id = ?", (user_id,))
+        total_transactions = cursor.fetchone()[0]
+        
+        # Total amount
+        cursor.execute("SELECT SUM(amount) FROM transactions WHERE user_id = ?", (user_id,))
+        total_amount = cursor.fetchone()[0] or 0
+        
+        # Monthly transactions
+        cursor.execute("""
+            SELECT COUNT(*) FROM transactions 
+            WHERE user_id = ? AND date(created_at) >= date('now', '-30 days')
+        """, (user_id,))
+        monthly_transactions = cursor.fetchone()[0]
+        
+        # Active beneficiaries
+        cursor.execute("SELECT COUNT(*) FROM beneficiaries WHERE user_id = ?", (user_id,))
+        active_beneficiaries = cursor.fetchone()[0]
+        
+        conn.close()
+        
+        return {
+            "total_transactions": total_transactions,
+            "total_amount": total_amount,
+            "monthly_transactions": monthly_transactions,
+            "active_beneficiaries": active_beneficiaries
+        }
+    
+    def create_remitter(self, user_id, **kwargs):
+        """Create or update remitter details"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        # Check if remitter exists
+        cursor.execute("SELECT id FROM remitters WHERE user_id = ?", (user_id,))
+        existing = cursor.fetchone()
+        
+        if existing:
+            # Update existing
+            cursor.execute("""
+                UPDATE remitters SET 
+                account_number=?, account_name=?, bank_name=?, branch_name=?,
+                ifsc_code=?, swift_code=?, pan_number=?, mobile=?
+                WHERE user_id=?
+            """, (
+                kwargs.get('account_number'), kwargs.get('account_name'),
+                kwargs.get('bank_name'), kwargs.get('branch_name'),
+                kwargs.get('ifsc_code'), kwargs.get('swift_code'),
+                kwargs.get('pan_number'), kwargs.get('mobile'), user_id
+            ))
+        else:
+            # Create new
+            cursor.execute("""
+                INSERT INTO remitters 
+                (user_id, account_number, account_name, bank_name, branch_name,
+                 ifsc_code, swift_code, pan_number, mobile)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                user_id, kwargs.get('account_number'), kwargs.get('account_name'),
+                kwargs.get('bank_name'), kwargs.get('branch_name'),
+                kwargs.get('ifsc_code'), kwargs.get('swift_code'),
+                kwargs.get('pan_number'), kwargs.get('mobile')
+            ))
+        
+        conn.commit()
+        conn.close()
+        return {"success": True}
+    
+    def get_remitter(self, user_id):
+        """Get remitter details for a user"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT account_number, account_name, bank_name, branch_name,
+                   ifsc_code, swift_code, pan_number, mobile
+            FROM remitters WHERE user_id = ?
+        """, (user_id,))
+        
+        row = cursor.fetchone()
+        conn.close()
+        
+        if row:
+            return {
+                "account_number": row[0],
+                "account_name": row[1], 
+                "bank_name": row[2],
+                "branch_name": row[3],
+                "ifsc_code": row[4],
+                "swift_code": row[5],
+                "pan_number": row[6],
+                "mobile": row[7]
+            }
+        return None
 
 class RTGSApp:
     def __init__(self):
@@ -157,8 +320,14 @@ class RTGSApp:
             '/docs': self.docs,
             '/api/auth/signup': self.signup,
             '/api/auth/login': self.login,
+            '/api/auth/me': self.get_profile,
             '/api/beneficiaries': self.beneficiaries,
             '/api/beneficiaries/create': self.create_beneficiary,
+            '/api/transactions': self.transactions,
+            '/api/transactions/create': self.create_transaction,
+            '/api/transactions/stats/dashboard': self.dashboard_stats,
+            '/api/remitter/me': self.get_remitter,
+            '/api/remitter/': self.create_remitter,
         }
     
     def __call__(self, environ, start_response):
@@ -218,8 +387,10 @@ class RTGSApp:
             "status": "working",
             "docs": "/docs",
             "endpoints": {
-                "auth": ["/api/auth/signup", "/api/auth/login"],
+                "auth": ["/api/auth/signup", "/api/auth/login", "/api/auth/me"],
                 "beneficiaries": ["/api/beneficiaries", "/api/beneficiaries/create"],
+                "transactions": ["/api/transactions", "/api/transactions/create", "/api/transactions/stats/dashboard"],
+                "remitter": ["/api/remitter/me", "/api/remitter/"],
                 "health": ["/health", "/api/health"]
             }
         }, start_response)
@@ -329,6 +500,108 @@ class RTGSApp:
             return self.json_response({
                 "message": "Beneficiary created successfully",
                 "beneficiary_id": result['beneficiary_id']
+            }, start_response)
+            
+        except Exception as e:
+            return self.json_response({
+                "error": f"Server error: {str(e)}"
+            }, start_response, '500 Internal Server Error')
+    
+    def get_profile(self, environ, start_response):
+        """Get user profile (auth/me endpoint)"""
+        # For demo - in production, extract user from JWT token
+        return self.json_response({
+            "id": 1,
+            "email": "demo@example.com",
+            "full_name": "Demo User"
+        }, start_response)
+    
+    def transactions(self, environ, start_response):
+        """Get all transactions for authenticated user"""
+        if environ['REQUEST_METHOD'] == 'GET':
+            # For demo purposes - in production, extract user_id from auth token
+            user_id = 1
+            transactions = self.db.get_transactions(user_id)
+            return self.json_response({"transactions": transactions}, start_response)
+        elif environ['REQUEST_METHOD'] == 'POST':
+            return self.create_transaction(environ, start_response)
+        else:
+            return self.json_response({"error": "Method not allowed"}, start_response, '405 Method Not Allowed')
+    
+    def create_transaction(self, environ, start_response):
+        """Create a new transaction"""
+        try:
+            data = self.get_request_body(environ)
+            user_id = 1  # For demo - extract from auth token in production
+            
+            beneficiary_id = data.get('beneficiary_id')
+            amount = data.get('amount')
+            purpose = data.get('purpose', '')
+            
+            if not beneficiary_id or not amount:
+                return self.json_response({
+                    "error": "Beneficiary ID and amount are required"
+                }, start_response, '400 Bad Request')
+            
+            result = self.db.create_transaction(user_id, beneficiary_id, amount, purpose)
+            
+            return self.json_response({
+                "message": "Transaction created successfully",
+                "transaction_id": result['transaction_id']
+            }, start_response)
+            
+        except Exception as e:
+            return self.json_response({
+                "error": f"Server error: {str(e)}"
+            }, start_response, '500 Internal Server Error')
+    
+    def dashboard_stats(self, environ, start_response):
+        """Get dashboard statistics"""
+        if environ['REQUEST_METHOD'] != 'GET':
+            return self.json_response({"error": "Method not allowed"}, start_response, '405 Method Not Allowed')
+        
+        try:
+            user_id = 1  # For demo - extract from auth token in production
+            stats = self.db.get_dashboard_stats(user_id)
+            return self.json_response(stats, start_response)
+        except Exception as e:
+            return self.json_response({
+                "error": f"Server error: {str(e)}"
+            }, start_response, '500 Internal Server Error')
+    
+    def get_remitter(self, environ, start_response):
+        """Get remitter bank details"""
+        if environ['REQUEST_METHOD'] != 'GET':
+            return self.json_response({"error": "Method not allowed"}, start_response, '405 Method Not Allowed')
+        
+        try:
+            user_id = 1  # For demo - extract from auth token in production
+            remitter = self.db.get_remitter(user_id)
+            
+            if remitter:
+                return self.json_response(remitter, start_response)
+            else:
+                return self.json_response({
+                    "error": "No remitter details found"
+                }, start_response, '404 Not Found')
+        except Exception as e:
+            return self.json_response({
+                "error": f"Server error: {str(e)}"
+            }, start_response, '500 Internal Server Error')
+    
+    def create_remitter(self, environ, start_response):
+        """Create or update remitter bank details"""
+        if environ['REQUEST_METHOD'] not in ['POST', 'PUT']:
+            return self.json_response({"error": "Method not allowed"}, start_response, '405 Method Not Allowed')
+        
+        try:
+            data = self.get_request_body(environ)
+            user_id = 1  # For demo - extract from auth token in production
+            
+            result = self.db.create_remitter(user_id, **data)
+            
+            return self.json_response({
+                "message": "Remitter details saved successfully"
             }, start_response)
             
         except Exception as e:
