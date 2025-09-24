@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 from typing import Optional, Union
-from jose import JWTError, jwt
+import jwt
 from passlib.context import CryptContext
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -50,7 +50,7 @@ def verify_token(token: str, credentials_exception: HTTPException) -> TokenData:
             raise credentials_exception
         token_data = TokenData(user_id=user_id)
         return token_data
-    except JWTError:
+    except jwt.InvalidTokenError:
         raise credentials_exception
 
 
