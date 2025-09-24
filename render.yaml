@@ -2,7 +2,7 @@ name: rtgs-backend
 type: web
 env: python
 buildCommand: pip install -r requirements.txt
-startCommand: python -m uvicorn app.simple_main:app --host 0.0.0.0 --port $PORT
+startCommand: gunicorn --bind 0.0.0.0:$PORT app.wsgi_app:app
 envVars:
   - key: PYTHON_VERSION
     value: "3.11.9"
