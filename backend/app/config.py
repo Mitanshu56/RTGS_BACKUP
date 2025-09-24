@@ -1,4 +1,4 @@
-from pydantic_settings import BaseSettings
+from pydantic import BaseSettings
 from typing import Optional, List
 
 
@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     debug: bool = True
     
     # CORS - using simple list
-    cors_origins: List[str] = ["http://localhost:3000", "http://localhost:3001", "http://localhost:5173"]
+    cors_origins: List[str] = ["http://localhost:3000", "http://localhost:3001", "http://localhost:5173", "*"]
     
     # App
     app_name: str = "RTGS Automation App"
@@ -31,7 +31,6 @@ class Settings(BaseSettings):
     
     class Config:
         env_file = ".env"
-        extra = "ignore"  # This allows extra fields without validation errors
 
 
 settings = Settings()
