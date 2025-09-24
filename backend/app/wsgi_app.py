@@ -165,6 +165,10 @@ class RTGSApp:
         path = environ['PATH_INFO']
         method = environ['REQUEST_METHOD']
         
+        # Handle CORS preflight requests
+        if method == 'OPTIONS':
+            return self.cors_preflight(environ, start_response)
+        
         if path in self.routes:
             return self.routes[path](environ, start_response)
         else:
@@ -189,10 +193,23 @@ class RTGSApp:
             ('Content-Length', str(len(response_body))),
             ('Access-Control-Allow-Origin', '*'),
             ('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS'),
-            ('Access-Control-Allow-Headers', 'Content-Type, Authorization'),
+            ('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With'),
+            ('Access-Control-Max-Age', '86400'),
         ]
         start_response(status, response_headers)
         return [response_body]
+    
+    def cors_preflight(self, environ, start_response):
+        """Handle CORS preflight requests"""
+        response_headers = [
+            ('Access-Control-Allow-Origin', '*'),
+            ('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS'),
+            ('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With'),
+            ('Access-Control-Max-Age', '86400'),
+            ('Content-Length', '0'),
+        ]
+        start_response('200 OK', response_headers)
+        return [b'']
     
     def home(self, environ, start_response):
         return self.json_response({
